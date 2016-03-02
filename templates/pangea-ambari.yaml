@@ -1,0 +1,57 @@
+#cloud-config
+package_upgrade: true
+hostname: ${hostname}
+fqdn: ${hostname}.${domain}
+write_files:
+#  - content: |
+#      #!/bin/bash
+#      # [w]ait [u]ntil [p]ort [i]s [a]ctually [o]pen
+#      [ -n "$1" ] && \
+#      while ! curl --output /dev/null --silent --head --fail http://$1; do sleep 2 && echo -n .; done;
+#      exit $?
+#    path: /opt/bin/wupiao
+#    permissions: '0755'
+  - content: |
+      #!/bin/bash
+      HOSTIP=`/usr/bin/curl -s http://169.254.169.254/latest/meta-data/local-ipv4`
+      MLD=$$(echo ${domain} | cut -d"." -f1)
+      TLD=$$(echo ${domain} | cut -d"." -f2)
+
+      # Disable resolv.conf management by dhclient
+      sed -i -e '/PEERDNS=/ s/=.*/=\"no\"/' /etc/sysconfig/network-scripts/ifcfg-eth0
+
+      cat > /etc/sysconfig/network <<EOF
+      NETWORKING=yes
+      NOZEROCONF=yes
+      DNS1=$${HOSTIP}
+      SEARCH=${domain} node.consul
+      EOF
+
+      cat >/etc/hosts <<EOF
+      $${HOSTIP} ${hostname}.${domain} ${hostname}
+      127.0.0.1 localhost
+      EOF
+
+      echo "My hostname is: ${hostname}.${domain}, IP: $${HOSTIP}"
+      sudo yum -y install docker
+      sudo service docker start
+      sudo docker pull ciscocloud/pangea-ambari
+
+      sudo cat /etc/hosts > /tmp/hosts
+      sudo sed -i '/.cisco.com/c\' /tmp/hosts
+      sudo echo "$(hostname -I | awk '{print $1}') $(hostname -f) $(hostname -a)" >> /tmp/hosts
+      sudo cp /tmp/hosts /etc/hosts
+
+      sudo echo -e "search node.consul\nnameserver 127.0.0.1" > /tmp/resolv.conf && \
+          sudo cp /tmp/resolv.conf /etc/resolv.conf && \
+          sudo service docker restart
+
+      sudo docker run --net=host --privileged -d \
+          -v /sys/fs/cgroup:/sys/fs/cgroup:ro \
+          -v /var/lib/ambari-server/resources/kubernetes:/var/lib/ambari-server/resources/kubernetes \
+          -p 8080:8080 -p 6181:6181 -p 53:53 -p 8300:8300 -p 8301:8301 -p 8302:8302 -p 8400:8400 -p 8500:8500 \
+          ciscocloud/pangea-ambari
+
+    path: /var/lib/cloud/scripts/per-boot/setup_dns.sh
+    owner: root:root
+    permissions: 0755
